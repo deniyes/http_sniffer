@@ -50,6 +50,7 @@ typedef struct {
     int daemon;
     char access_log[128];
     char error_log[128];
+	char status_file[128];
     log_output_t *log_handlers[128];
 
 } sniffer_conf_t;
@@ -59,8 +60,9 @@ sniffer_conf_t  g_sniffer_conf = {
     .thread_num = 1,
     .max_thread_num = 1,
     .daemon = 1,
-    .access_log = {'a','c','c','e','s','s','.','l','o','g','\0'},
-    .error_log = {'e','r','r','o','r','.','l','o','g', '\0'},
+    .access_log = "access.log",
+    .error_log = "error.log",
+    .status_file = "/etc/openvpn/openvpn-status.log",
     .log_handlers = {NULL},
 
 };
@@ -129,6 +131,11 @@ conf_name_mapping_t name_mapping[] = {
     9,
     &g_sniffer_conf,
     offsetof(sniffer_conf_t, error_log),
+    sniffer_set_path},
+    {"status_file",
+    11,
+    &g_sniffer_conf,
+    offsetof(sniffer_conf_t, status_file),
     sniffer_set_path},
     {"daemon",
     6,
@@ -702,7 +709,8 @@ int sniffer_get_real_ip(char *ip, char *p, char **q)
     char *s = NULL;
     char *d = NULL;
     int n = 0;
-    sprintf(buf, "grep %s /etc/openvpn/openvpn-status4.log | awk -F':' '{print $1}' | awk -F',' '{print $2, $3}'", ip);
+    sprintf(buf, "grep %s %s | awk -F':' '{print $1}' | awk -F',' '{print $2, $3}'", \
+		ip, g_sniffer_conf.status_file);
     FILE *sp = popen(buf, "r");
     if (sp == NULL)
         return -1;
