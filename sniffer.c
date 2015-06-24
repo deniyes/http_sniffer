@@ -264,13 +264,6 @@ free_buf_t g_free_buf;
 FILE *g_access_file = NULL;
 FILE *g_error_file = NULL;
 
-typedef struct log_map_s {
-    int name_len;
-    char *name;
-    char *value;
-}log_map_t;
-
-
 
 unsigned int 
 sniffer_hash_function(packet_info_t *info)
@@ -762,12 +755,10 @@ int sniffer_analy_data(request_info_t *info, int mode)
     char *end = p + info->req_app_len;
     char *name = NULL;
     char *value = NULL;
+	char *uri = NULL;
     int len = 0;
     int status = 0;
-    char *uri = NULL;
-    log_map_t     *temp = NULL;
-
-
+    
     if (mode == sniffer_response_mode) {
         while (p < end && *p != ' ') 
             p ++;
