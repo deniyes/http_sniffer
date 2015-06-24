@@ -628,7 +628,7 @@ int parse_info(char *name, char *value)
         p ++;
     }
     if (p->name == NULL) {
-        fprintf(g_error_file, "unsuport conf item: %s\n", name);
+        fprintf(stderr, "unsuport conf item: %s\n", name);
         return -1;
     }
 
@@ -659,7 +659,7 @@ int parse_line(char *start, char *end)
         *p = '\0';
     return parse_info(name, value);
 ERROR:
-	fprintf(g_error_file, "read empty line from config.\n");
+	fprintf(stderr, "read empty line from config.\n");
 	return -1;
 }
 
@@ -687,7 +687,7 @@ int parse_conf(char *path)
         s = line;
 		len = strlen(s);
 		if (len == 2048 - 1) {
-            fprintf(g_error_file, "maybe read truncate line from config.\n");
+            fprintf(stderr, "maybe read truncate line from config.\n");
 			continue;
 		}
 		end = s + len;
@@ -695,7 +695,7 @@ int parse_conf(char *path)
             s ++;
         }
 		if (s == end) {
-            fprintf(g_error_file, "read empty line from config.\n");
+            fprintf(stderr, "read empty line from config.\n");
 			continue;
 		}
         if (s < end && (*s == '#' || (*s == '/' && *(s + 1) == '/'))) {
