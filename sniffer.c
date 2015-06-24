@@ -383,17 +383,19 @@ void sniffer_hash_mergh(request_info_t *item)
     pthread_mutex_lock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
     request_info_t *head = g_free_buf.request_hash[hash_value % max_request_hash];
     request_info_t *p = head;
+	size_t start_offset = offsetof(request_info_t, uri);
+	size_t end_offset = offsetof(request_info_t, accept_charset);
+	char **pos = NULL;
+	char **dst = NULL;
     while (p) {
         if (sniffer_compare_function_r(&item->packet_info, &p->packet_info)) {
             fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s is merghing.\n", \
                 item->dst_ip, item->src_ip, item->dst_port, item->src_port);
-            item->uri = p->uri;
-            item->host = p->host;
-            item->cookie = p->cookie;
-            item->accept_encoding = p->accept_encoding;
-            item->accept_charset = p->accept_charset;
-            item->user_agent = p->user_agent;
-            item->partern = p;
+            for(pos = (char**)((char*)p + start_offset), dst = (char**)((char*)item + start_offset); 
+			    pos <= (char**)((char*)p + end_offset), dst <= (char**)((char*)item + end_offset); pos ++)
+				if (*pos != NULL && *dst == NULL)
+					*dst = *pos;
+			
             pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
             return;
         }
@@ -621,35 +623,44 @@ int parse_info(char *name, char *value)
         }
         if (strncasecmp(name, p->name, p->len) == 0){
             p->handler(value, p->offset, p->conf);
-             break;
+            break;
         }
         p ++;
     }
     if (p->name == NULL) {
-        fprintf(stderr, "unsuport conf item: %s\n", name);
+        fprintf(g_error_file, "unsuport conf item: %s\n", name);
         return -1;
     }
 
     return 0;
 }
 
-int parse_line(char *line)
+int parse_line(char *start, char *end)
 {
-    char *name = line;
+    char *name = start;
     char *value = NULL;
 
-    char *p = line;
-    while (*p != ' ' && *p != '\t' && *p != '=')
+    char *p = start;
+    while (p < end && *p != ' ' && *p != '\t' && *p != '=')
         p ++;
+	if (p == end)
+		goto ERROR;
     *p ++ = '\0';
-    while (*p == ' ' || *p == '\t' || *p == '=')
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '='))
         p ++;
+	if (p == end)
+		goto ERROR;
     value = p;
-    while (*p != '\n' && *p != ';')
+    while (p < end && *p != '\n' && *p != ';')
         p ++;
+	if (p == end)
+		goto ERROR;
     if (*p == ';')
         *p = '\0';
     return parse_info(name, value);
+ERROR:
+	fprintf(g_error_file, "read empty line from config.\n");
+	return -1;
 }
 
 
@@ -660,8 +671,9 @@ int parse_conf(char *path)
         goto ERROR;
     }
     char *s = NULL;
+	char *end = NULL;
     char line[2048];
-    int p = 0;
+    int len = 0;
 
     while (!feof(fp)) {
         s = fgets(line, 2048, fp);
@@ -673,14 +685,23 @@ int parse_conf(char *path)
             }
         }
         s = line;
-        while (isspace(*s)) {
+		len = strlen(s);
+		if (len == 2048 - 1) {
+            fprintf(g_error_file, "maybe read truncate line from config.\n");
+			continue;
+		}
+		end = s + len;
+        while (s < end && isspace(*s)) {
             s ++;
         }
-        if (*s == 0 || *s == '#' || (*s == '/' && *(s + 1) == '/')) {
+		if (s == end) {
+            fprintf(g_error_file, "read empty line from config.\n");
+			continue;
+		}
+        if (s < end && (*s == '#' || (*s == '/' && *(s + 1) == '/'))) {
             continue;
         }
-        p = parse_line(s);
-        if (p) {
+        if (parse_line(s, end)) {
             goto ERROR;
         }
     }
