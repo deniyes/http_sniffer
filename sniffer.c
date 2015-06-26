@@ -67,6 +67,8 @@ sniffer_conf_t  g_sniffer_conf = {
 
 };
 
+char *g_request_method[] = {"GET ", "POST ", NULL};
+char *g_response_method[]= {"HTTP/1.0 ", "HTTP/1.1 ", NULL};
 
 typedef int (*Handler)(char *value, int offset, char *conf);
 typedef struct{
@@ -81,6 +83,7 @@ typedef struct request_info_s request_info_t;
 struct request_info_s{
 
     int req_app_len;
+	int status;
 
     char *token;
     char *src_ip;
@@ -97,6 +100,8 @@ struct request_info_s{
     char *referer;
     char *content_type;
     char *content_length;
+	char *transfer_encoding;
+	char *content_encoding;
     char *cookie;
     char *connection;
     char *accept_encoding;
@@ -156,15 +161,23 @@ conf_name_mapping_t name_mapping[] = {
 
 
 log_output_t log_format[] = {
-        {"time",
-        4,
-        offsetof(request_info_t, time),
+	    {"Content-Type",
+        12,
+        offsetof(request_info_t, content_type),
         sniffer_log_get_header},
-        {"url",
-        3,
-        0,
-        sniffer_log_get_url},
-        {"Host",
+	    {"Content-Length",
+        14,
+        offsetof(request_info_t, content_length),
+        sniffer_log_get_header},
+        {"Content-Encoding",
+        16,
+        offsetof(request_info_t, content_encoding),
+        sniffer_log_get_header},
+        {"Transfer-Encoding",
+        17,
+        offsetof(request_info_t, transfer_encoding),
+        sniffer_log_get_header},
+	    {"Host",
         4,
         offsetof(request_info_t, host),
         sniffer_log_get_header},
@@ -172,10 +185,7 @@ log_output_t log_format[] = {
         10,
         offsetof(request_info_t, user_agent),
         sniffer_log_get_header},
-        {"Content-Type",
-        12,
-        offsetof(request_info_t, content_type),
-        sniffer_log_get_header},
+        
         {"Accept-Encoding",
         15,
         offsetof(request_info_t, accept_encoding),
@@ -184,6 +194,14 @@ log_output_t log_format[] = {
         7,
         offsetof(request_info_t, referer),
         sniffer_log_get_header},
+        {"time",
+        4,
+        offsetof(request_info_t, time),
+        sniffer_log_get_header},
+        {"url",
+        3,
+        0,
+        sniffer_log_get_url},
         {"Token",
         5,
         offsetof(request_info_t, token),
@@ -571,110 +589,77 @@ void sniffer_log_request(request_info_t *info)
 
 }
 
-
 void arrange_item(request_info_t *info, char *name, char *value, int name_len)
 {
-    char c = 0;
-    char h = 0;
-
-    c = name[0];
-
-    switch(c) {
-        case 'A':
-            h = name[7];
-            if (h == 'C')
-                info->accept_charset = value;
-            else if (h == 'E')
-                info->accept_encoding = value;
-            else
-                goto ERROR;
-            break;
-        case 'C':
-            h = name[3];
-            if (h == 'k')
-                info->cookie = value;
-            else if (h == 'n')
-                info->connection = value;
-            else if (h == 't') {
-                h = name[8];
-                if (h == 'L')
-                    info->content_length = value;
-                else if (h == 'T')
-                    info->content_type = value;
-                else
-                    goto ERROR;
-            } else
-                goto ERROR;
-            break;
-        case 'H':
-            if (name_len != 4) {
-                goto ERROR;
-            }
-            if (strncmp(name, "Host", 4) != 0)
-                goto ERROR;
-            info->host = value;
-            break;
-        case 'U':
-            if (name_len != 10)
-                goto ERROR;
-
-
-            if (strncmp(name, "User-Agent", 10) != 0)
-                goto ERROR;
-            info->user_agent = value;
-
-            break;
-        case 'R':
-            if (name_len != 7)
-                goto ERROR;
-            if (strncmp(name, "Referer", 7) != 0)
-                goto ERROR;
-            info->referer = value;
-
-            break;
-        default:
-            fprintf(stderr, "unsupport header: %s\n", name);
-            break;
-    }
-    return;
-ERROR:
-    fprintf(stderr, "unsupport header: %s\n", name);
+    char **s = NULL;
+    log_output_t *tmp = &log_format[0];
+	while (tmp->name_len) {
+        if (tmp->name_len == name_len) 
+			if (strncmp(name, tmp->name, name_len) == 0) {
+                s = (char**)((char*)info + tmp->offset);
+				*s = value;
+				return;
+			}
+		tmp ++;
+	}
+	fprintf(stderr, "unsupport header: %s\n", name);
 }
 
 
 
-
-int sniffer_analy_data(request_info_t *info)
+#define check_end(p, end) { if (p == end) return -1;}
+int sniffer_analy_data(request_info_t *info, int mode)
 {
     char *p = info->req_app_data;
     char *end = p + info->req_app_len;
     char *name = NULL;
     char *value = NULL;
     int len = 0;
+	int status = 0;
     char *uri = NULL;
     log_map_t     *temp = NULL;
 
-    int offset = (*p == 'G')? 4:5;
 
-    p += offset;
+    if (mode) {
+		while (p < end && *p != ' ') 
+            p ++;
+		if (p == end) return -1;
+		p += 1;
 
-    if (strncmp(p, "/abc/", 5) == 0 \
-        || strncmp(p, "/vpn/", 5) == 0 \
-        || strncmp(p, "/gate/", 6) == 0) {
-        return -1;
+		while (p < end && isdigit(*p)) {
+            status = status * 10 + *p - '0';
+			p ++;
+		}
+		if (p == end) return -1;
+			
+    } else {
+		while (p < end && *p != ' ') 
+            p ++;
+		if (p == end) return -1;
+		p += 1;
+
+        if (strncmp(p, "/abc/", 5) == 0 \
+            || strncmp(p, "/vpn/", 5) == 0 \
+            || strncmp(p, "/gate/", 6) == 0) {
+            return -1;
+        }
+        info->uri = p;
+        while (p < end && *p != ' ')
+             p ++;
+		if (p == end) return -1;
+        *p ++ = '\0';
+        
     }
-    info->uri = p;
-    while (*p != ' ')
-         p ++;
-    *p ++ = '\0';
-    while (p < end) {
-         if (*p == '\r' && *(p + 1) == '\n') {
-             p += 2;
-             break;
-         }
-         p ++;
+    while (p < end - 1) {
+        if (*p == '\r' && *(p + 1) == '\n') {
+            p += 2;
+            break;
+        }
+        p ++;
     }
-
+	if (p == end - 1)
+		return -1;
+	
     name = p;
     while (p < end) {
          if (*p == ':' && *(p + 1) == ' ') {
@@ -715,6 +700,7 @@ int sniffer_get_real_ip(char *ip, char *p, char **q)
     if (sp == NULL)
         return -1;
     n = fread(p, 1, 128, sp);
+	pclose(sp);
     s = p;
     d = p + n;
 
@@ -724,18 +710,16 @@ int sniffer_get_real_ip(char *ip, char *p, char **q)
         s ++;
     }
     if (s == d) {
-        pclose(sp);
         return -1;
     }
-    *s = '\0';
-    *q = s + 1;
-    p[n-1]='\0';
-    pclose(sp);
+    *(s ++) = '\0';
+    *q = s;
+    p[n - 1]='\0';
     return 0;
 }
 
 
-int sniffer_decode_data(request_info_t *info, int len)
+int sniffer_decode_data(request_info_t *info, int len, int mode)
 {
     struct iphdr *ip_h;
     struct tcphdr *tcp_h;
@@ -743,15 +727,9 @@ int sniffer_decode_data(request_info_t *info, int len)
     struct ether_header *ether_h;
     unsigned int ip_h_len = 0;
     unsigned int tcp_h_len = 0;
-    unsigned short sport = 0;
-    unsigned short dport = 0;
     unsigned int ip_tot_len = 0;
-    char *data = info->request_data;
-    char s[16] = {0};
-    char d[16] = {0};
-    int time_len = 0;
+	char **p = NULL;
     time_t    t;
-    int ret = 0;
 
     info->cur = info->request_data + len;
     info->end = info->request_data + MAX_REQUEST_DATA_SIZE;
@@ -773,7 +751,9 @@ int sniffer_decode_data(request_info_t *info, int len)
     info->time = info->dst_port + 8;
     info->cur = info->time + 32;
 
-    ip_h = (struct iphdr*)(data);
+    ip_h = (struct iphdr*)(info->request_data);
+	if (ip_h->protocol != 0x06) 
+		return -1;
 
     ip_h_len = ip_h->ihl << 2;
     ip_tot_len = ntohs(ip_h->tot_len);
@@ -783,26 +763,46 @@ int sniffer_decode_data(request_info_t *info, int len)
 
     info->req_app_len = ip_tot_len - ip_h_len - tcp_h_len;
     info->req_app_data = (char*)tcp_h + tcp_h_len;
-    if (strncmp(info->req_app_data, "GET ", 4) != 0 \
-        && strncmp(info->req_app_data, "POST ", 5) != 0)
-        return -1;
+
+	if (!info->req_app_data) 
+		return -1;
 
     t = time(NULL);
     ctime_r(&t, info->time);
-    time_len = strlen(info->time);
-    info->time[time_len - 1] = '\0';
+    info->time[strlen(info->time) - 1] = '\0';
 
-    strcpy(info->mid_ip, inet_ntoa(*((struct in_addr*)&ip_h->saddr)));
-    ret = sniffer_get_real_ip(inet_ntoa(*((struct in_addr*)&ip_h->saddr)), info->token, &info->src_ip);
-    if (ret)
-        return -1;
-    strcpy(info->dst_ip, inet_ntoa(*((struct in_addr*)&ip_h->daddr)));
+	if (!mode) {
+		p = &g_request_method[0];
+		while (*p) {
+            if (memcmp(*p, info->req_app_data, strlen(*p)) == 0) 
+				break;
+			p ++;
+		}	
+		if (!(*p))
+			return -1;
+        strcpy(info->mid_ip, inet_ntoa(*((struct in_addr*)&ip_h->saddr)));
+        if (sniffer_get_real_ip(info->mid_ip, info->token, &info->src_ip))
+            return -1;
+        strcpy(info->dst_ip, inet_ntoa(*((struct in_addr*)&ip_h->daddr)));
 
-    sport = ntohs(tcp_h->source);
-    dport = ntohs(tcp_h->dest);
-    snprintf(info->src_port, 8, "%d", sport);
-    snprintf(info->dst_port, 8, "%d", dport);
-
+        snprintf(info->src_port, 8, "%d", ntohs(tcp_h->source));
+        snprintf(info->dst_port, 8, "%d", ntohs(tcp_h->dest));
+	} else {
+	    p = &g_response_method[0];
+		while (*p) {
+            if (memcmp(*p, info->req_app_data, strlen(*p)) == 0) 
+				break;
+			p ++;
+		}	
+		if (!(*p))
+			return -1;
+        strcpy(info->mid_ip, inet_ntoa(*((struct in_addr*)&ip_h->daddr)));
+        if (sniffer_get_real_ip(info->mid_ip, info->token, &info->src_ip))
+            return -1;
+        strcpy(info->dst_ip, inet_ntoa(*((struct in_addr*)&ip_h->saddr)));
+        snprintf(info->src_port, 8, "%d", ntohs(tcp_h->dest));
+        snprintf(info->dst_port, 8, "%d", ntohs(tcp_h->source));
+	}
 
     return 0;
 
@@ -910,9 +910,10 @@ int main(int argc, char **argv)
     int sock = 0;
     int len = 0;
     int rval = 0;
+	int mode = 0;
     char c = 0;
 
-    while ((c = getopt(argc, argv, "c:i:")) != -1) {
+    while ((c = getopt(argc, argv, "c:i:m:")) != -1) {
         switch(c) {
             case 'c':
                 conf_file = optarg;
@@ -920,6 +921,9 @@ int main(int argc, char **argv)
             case 'i':
                 select_interface = optarg;
                 break;
+			case 'm':
+				mode = atoi(optarg);
+				break;
             default:
                 fprintf(stderr, "invalid arg.\n");
                 exit(-1);
@@ -966,20 +970,20 @@ int main(int argc, char **argv)
             p = calloc(1, sizeof(request_info_t));
             if (!p) {
                 fprintf(stderr, "get request_info_t fail.\n");
-             sleep(1);
-             continue;
+                sleep(1);
+                continue;
             }
         }
 
         rval = recvfrom(sock, p->request_data, MAX_REQUEST_DATA_SIZE, \
                         0,(struct sockaddr*)&rcvaddr,&len);
         if(rval > 0) {
-            rval = sniffer_decode_data(p, rval);
+            rval = sniffer_decode_data(p, rval, mode);
             if (rval) {
                 release_request_info(p);
                 continue;
             }
-            rval = sniffer_analy_data(p);
+            rval = sniffer_analy_data(p, mode);
             if (rval) {
                 release_request_info(p);
                 continue;
