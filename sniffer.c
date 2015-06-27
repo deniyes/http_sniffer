@@ -25,12 +25,11 @@
 
 
 char* sniffer_log_get_header(int offset, char *conf);
-char *sniffer_log_get_url(int offset, char *conf);
-char *sniffer_log_get_int(int offset, char *conf);
 int sniffer_set_num(char *value, int offset, char *conf);
 int sniffer_set_flg(char *value, int offset, char *conf);
 int sniffer_set_path(char *value, int offset, char *conf);
 int sniffer_set_hander_array(char *value, int offset, char *conf);
+
 
 #define MAX_REQUEST_DATA_SIZE (2048)
 
@@ -79,12 +78,21 @@ typedef struct{
     Handler handler;
 } conf_name_mapping_t;
 
+
+typedef struct packet_info_s {
+    unsigned short s_port;
+    unsigned short d_port;
+    unsigned int s_addr;
+    unsigned int d_addr;
+}packet_info_t;
+
+
 typedef struct request_info_s request_info_t;
 struct request_info_s{
-
+    time_t cur_time;
     int req_app_len;
-	int status;
-
+    packet_info_t packet_info;
+	
     char *token;
     char *src_ip;
     char *mid_ip;
@@ -94,7 +102,6 @@ struct request_info_s{
     char *time;
 
     char *uri;
-    char *url;
     char *host;
     char *user_agent;
     char *referer;
@@ -104,6 +111,7 @@ struct request_info_s{
 	char *content_encoding;
     char *cookie;
     char *connection;
+	char *response_status;
     char *accept_encoding;
     char *accept_charset;
 
@@ -111,7 +119,9 @@ struct request_info_s{
     char *extra;
     char *cur;
     char *end;
-    request_info_t *next;
+	request_info_t *partern;
+    request_info_t *hash_next;
+	request_info_t *list_next;
     char request_data[MAX_REQUEST_DATA_SIZE];
 };
 
@@ -181,11 +191,14 @@ log_output_t log_format[] = {
         4,
         offsetof(request_info_t, host),
         sniffer_log_get_header},
+	    {"status",
+	    6,
+	    offsetof(request_info_t, response_status),
+	    sniffer_log_get_header},
         {"User-Agent",
         10,
         offsetof(request_info_t, user_agent),
-        sniffer_log_get_header},
-        
+        sniffer_log_get_header},     
         {"Accept-Encoding",
         15,
         offsetof(request_info_t, accept_encoding),
@@ -198,10 +211,10 @@ log_output_t log_format[] = {
         4,
         offsetof(request_info_t, time),
         sniffer_log_get_header},
-        {"url",
+        {"uri",
         3,
-        0,
-        sniffer_log_get_url},
+        offsetof(request_info_t, uri),
+        sniffer_log_get_header},
         {"Token",
         5,
         offsetof(request_info_t, token),
@@ -232,12 +245,18 @@ log_output_t log_format[] = {
         NULL}
 };
 
+#define max_request_num (4096)
+#define max_request_hash (937)
+
+#define g_request_item_timeout  (300)
 
 typedef struct free_buf_s{
     int free_buf_num;
     request_info_t *free_buf_header;
     pthread_mutex_t lock;
-    request_info_t request_buf[4096];
+    request_info_t request_buf[max_request_num];
+	request_info_t *request_hash[max_request_hash];
+	pthread_mutex_t lock_hash[max_request_hash];
 }free_buf_t;
 
 free_buf_t g_free_buf;
@@ -252,6 +271,31 @@ typedef struct log_map_s {
 }log_map_t;
 
 
+
+unsigned int 
+sniffer_hash_function(packet_info_t *info)
+{
+    return (info->s_addr + info->d_addr + info->s_port + info->d_port) ;
+}
+
+int sniffer_compare_function (packet_info_t *src, packet_info_t *dst)
+{
+    return (src->s_addr == dst->s_addr \
+        && src->d_addr == dst->d_addr \
+        && src->s_port == dst->s_port \
+        && src->d_port == dst->d_port);
+}
+
+int sniffer_compare_function_r (packet_info_t *src, packet_info_t *dst)
+{
+    return (src->s_addr == dst->d_addr \
+        && src->d_addr == dst->s_addr \
+        && src->s_port == dst->d_port \
+        && src->d_port == dst->s_port);
+}
+
+
+
 char* sniffer_log_get_header(int offset, char *conf)
 {
     char **p = (char**)(conf + offset);
@@ -259,45 +303,172 @@ char* sniffer_log_get_header(int offset, char *conf)
 }
 
 
-char *sniffer_log_get_url(int offset, char *conf)
+void init_g_free_buf()
 {
-    request_info_t *t = (request_info_t*)conf;
-    int host_len = 0;
-    int uri_len = 0;
-    int index = 0;
-    char *p = NULL;
-
-    if (!t->host) {
-        t->host = t->dst_ip;
+    int i = 0;
+    for (i = max_request_num - 2; i >= 0; i --) {
+        memset(&g_free_buf.request_buf[i], 0, sizeof(request_info_t));		
+        g_free_buf.request_buf[i].list_next = &g_free_buf.request_buf[i + 1];
     }
-    host_len = strlen(t->host);
-    uri_len = strlen(t->uri);
+	for (i = 0; i < max_request_hash; i ++) {
+        g_free_buf.request_hash[i] = NULL;
+		pthread_mutex_init(&g_free_buf.lock_hash[i], NULL);
+	}
+    g_free_buf.free_buf_header = &g_free_buf.request_buf[0];
+    g_free_buf.free_buf_num = max_request_num;
+    pthread_mutex_init(&g_free_buf.lock, NULL);
+}
 
-    if (t->end - t->cur <  host_len + uri_len + 1 + 7) {
-        p = malloc(host_len + uri_len + 1 + 7);
-        if (!p) {
-            fprintf(stderr, "malloc fail.\n");
-            return NULL;
-        }
-        t->url = p;
-    } else
-        p = t->cur;
 
-    memcpy(p + index, "http://", 7);
-    index += 7;
-
-    memcpy(p + index, t->host, host_len);
-    index += host_len;
-
-    memcpy(p + index, t->uri, uri_len);
-    index += uri_len;
-
-    p[index] = '\0';
-    index += 1;
-
-    t->cur = p + index;
-
+request_info_t *get_free_request()
+{
+    request_info_t *p = NULL;
+    pthread_mutex_lock(&g_free_buf.lock);
+    if (g_free_buf.free_buf_num > 0) {
+        p = g_free_buf.free_buf_header;
+        g_free_buf.free_buf_header = g_free_buf.free_buf_header->list_next;
+        g_free_buf.free_buf_num --;
+        p->list_next = NULL;
+    }
+    pthread_mutex_unlock(&g_free_buf.lock);
     return p;
+}
+
+void sniffer_hash_del(request_info_t *item);
+
+void release_request_info(request_info_t *r)
+{
+    if (r->extra) {
+        free(r->extra);
+        r->extra = NULL;
+    }
+	if (r->partern) {		
+		sniffer_hash_del(r->partern);
+		release_request_info(r->partern);
+	}
+    memset(r, 0, sizeof(request_info_t));
+    pthread_mutex_lock(&g_free_buf.lock);
+    r->list_next = g_free_buf.free_buf_header;
+    g_free_buf.free_buf_header = r;
+    g_free_buf.free_buf_num ++;
+    pthread_mutex_unlock(&g_free_buf.lock);
+}
+
+
+void sniffer_hash_add(request_info_t *item)
+{
+    unsigned int hash_value = sniffer_hash_function(&item->packet_info);
+
+    pthread_mutex_lock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+	request_info_t *head = g_free_buf.request_hash[hash_value % max_request_hash];
+	request_info_t *p = head;
+	while (p) {
+		if (sniffer_compare_function(&item->packet_info, &p->packet_info)) {
+			pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+            return;
+		}
+        p = p->hash_next;
+	}
+	fprintf(g_error_file, "src_ip:%s dst_ip:%s src_port: %s dst_port:%s is adding.\n", \
+		item->src_ip, item->dst_ip, item->src_port, item->dst_port);
+	item->hash_next = head;
+	g_free_buf.request_hash[hash_value % max_request_hash] = item;
+	pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+}
+
+void sniffer_hash_mergh(request_info_t *item)
+{
+    unsigned int hash_value = sniffer_hash_function(&item->packet_info);
+
+	pthread_mutex_lock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+	request_info_t *head = g_free_buf.request_hash[hash_value % max_request_hash];
+	request_info_t *p = head;
+	while (p) {
+		if (sniffer_compare_function_r(&item->packet_info, &p->packet_info)) {
+			fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s is merghing.\n", \
+		        item->dst_ip, item->src_ip, item->dst_port, item->src_port);
+			item->uri = p->uri;
+			item->host = p->host;
+			item->cookie = p->cookie;
+			item->accept_encoding = p->accept_encoding;
+			item->accept_charset = p->accept_charset;
+			item->user_agent = p->user_agent;
+			item->partern = p;
+			pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+            return;
+		}
+        p = p->hash_next;
+	}
+	pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+
+	fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s can't find partern item.\n", \
+		item->dst_ip, item->src_ip, item->dst_port, item->src_port);
+}
+
+
+void sniffer_hash_del(request_info_t *item)
+{
+    unsigned int hash_value = sniffer_hash_function(&item->packet_info);
+
+	pthread_mutex_lock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+	request_info_t *head = g_free_buf.request_hash[hash_value % max_request_hash];
+    if (sniffer_compare_function(&head->packet_info, &item->packet_info)) {
+		fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s is deleting.\n", \
+		        item->src_ip, item->dst_ip, item->src_port, item->dst_port);
+        g_free_buf.request_hash[hash_value % max_request_hash] = head->hash_next;
+		pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+		return;
+	}
+	
+	request_info_t *p = head->hash_next;
+	request_info_t *pre = head;
+	while (p) {
+		if (sniffer_compare_function(&item->packet_info, &p->packet_info)) {
+			fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s is deleting.\n", \
+		        item->src_ip, item->dst_ip, item->src_port, item->dst_port);
+			pre->hash_next = p->hash_next;
+			pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+            return;
+		}
+		pre = p;
+        p = p->hash_next;
+	}
+	pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
+	fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s can't find deleting item.\n", \
+		item->src_ip, item->dst_ip, item->src_port, item->dst_port);
+}
+
+
+void *sniffer_hash_aging(void *unused) 
+{
+    int index = 0;
+	time_t now = 0;
+    request_info_t *head = NULL;
+	request_info_t *pre = NULL;
+
+	while (1) {
+	    for (index = 0; index < max_request_hash; index ++) {
+            pthread_mutex_lock(&g_free_buf.lock_hash[index]);
+		    now = time(NULL);
+		    head = g_free_buf.request_hash[index];
+            pre = g_free_buf.request_hash[index];
+		    while (head) {
+                if (now - head->cur_time >= g_request_item_timeout) {
+                    fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s will aging item.\n", \
+		                                               head->src_ip, head->dst_ip, head->src_port, head->dst_port);
+				    if (head == g_free_buf.request_hash[index])
+					    g_free_buf.request_hash[index] = head->hash_next;
+				    else
+                        pre->hash_next = head->hash_next;
+				    release_request_info(head);
+			    }
+			    pre = head;
+			    head = head->hash_next;
+		    }
+		    pthread_mutex_unlock(&g_free_buf.lock_hash[index]);
+	    }
+	    sleep(120);
+    }
 }
 
 
@@ -309,7 +480,7 @@ int sniffer_set_num(char *value, int offset, char *conf)
     int num = 0;
     while (*s != '\0') {
         if (isdigit(*s) == 0) {
-             fprintf(stderr, "%c is not digit.\n", *s);
+             fprintf(g_error_file, "%c is not digit.\n", *s);
              return -1;
         }
         num = 10 * num + *s - '0';
@@ -437,52 +608,6 @@ ERROR:
     fprintf(stderr, "unsupport log format: %s\n", value);
     return -1;
 }
-void init_g_free_buf()
-{
-    int i = 0;
-    for (i = 0; i < 2048; i ++) {
-        g_free_buf.request_buf[i].next = NULL;
-        memset(&g_free_buf.request_buf[i], 0, sizeof(request_info_t));
-    }
-    g_free_buf.free_buf_header = &g_free_buf.request_buf[0];
-    g_free_buf.free_buf_num = 2048;
-    pthread_mutex_init(&g_free_buf.lock, NULL);
-}
-
-
-request_info_t *get_free_request()
-{
-    request_info_t *p = NULL;
-    pthread_mutex_lock(&g_free_buf.lock);
-    if (g_free_buf.free_buf_num > 0) {
-        p = g_free_buf.free_buf_header;
-        g_free_buf.free_buf_header = g_free_buf.free_buf_header->next;
-        g_free_buf.free_buf_num --;
-        p->next = NULL;
-    }
-    pthread_mutex_unlock(&g_free_buf.lock);
-    return p;
-}
-
-void release_request_info(request_info_t *r)
-{
-    if (r->url) {
-        free(r->url);
-        r->url = NULL;
-    }
-    if (r->extra) {
-        free(r->extra);
-        r->extra = NULL;
-    }
-    memset(r, 0, sizeof(request_info_t));
-    pthread_mutex_lock(&g_free_buf.lock);
-    r->next = g_free_buf.free_buf_header;
-    g_free_buf.free_buf_header = r;
-    g_free_buf.free_buf_num ++;
-    pthread_mutex_unlock(&g_free_buf.lock);
-}
-
-
 
 
 int parse_info(char *name, char *value)
@@ -602,12 +727,14 @@ void arrange_item(request_info_t *info, char *name, char *value, int name_len)
 			}
 		tmp ++;
 	}
-	fprintf(stderr, "unsupport header: %s\n", name);
+	fprintf(stderr, "unsupport header: %s.\n", name);
 }
 
+#define undef_mode            (0xFF)
+#define sniffer_request_mode  (0x11)
+#define sniffer_response_mode (0x22)
 
 
-#define check_end(p, end) { if (p == end) return -1;}
 int sniffer_analy_data(request_info_t *info, int mode)
 {
     char *p = info->req_app_data;
@@ -620,19 +747,22 @@ int sniffer_analy_data(request_info_t *info, int mode)
     log_map_t     *temp = NULL;
 
 
-    if (mode) {
+    if (mode == sniffer_response_mode) {
 		while (p < end && *p != ' ') 
             p ++;
 		if (p == end) return -1;
 		p += 1;
 
+		info->response_status = p;;
 		while (p < end && isdigit(*p)) {
             status = status * 10 + *p - '0';
 			p ++;
 		}
 		if (p == end) return -1;
+		*p ++ = '\0';
 			
     } else {
+        info->uri = p;
 		while (p < end && *p != ' ') 
             p ++;
 		if (p == end) return -1;
@@ -643,7 +773,6 @@ int sniffer_analy_data(request_info_t *info, int mode)
             || strncmp(p, "/gate/", 6) == 0) {
             return -1;
         }
-        info->uri = p;
         while (p < end && *p != ' ')
              p ++;
 		if (p == end) return -1;
@@ -663,7 +792,6 @@ int sniffer_analy_data(request_info_t *info, int mode)
     name = p;
     while (p < end) {
          if (*p == ':' && *(p + 1) == ' ') {
-             /*此处找到name*/
 
              *p = '\0';
              len = p - name;
@@ -675,7 +803,6 @@ int sniffer_analy_data(request_info_t *info, int mode)
         if (*p == '\r' && *(p + 1) == '\n') {
             *p = '\0';
             arrange_item(info, name, value, len);
-             /*开始处理下一个行*/
             len = 0;
             p = p + 2;
             if (*p == '\r' && *(p + 1) == '\n')
@@ -694,13 +821,18 @@ int sniffer_get_real_ip(char *ip, char *p, char **q)
     char *s = NULL;
     char *d = NULL;
     int n = 0;
-    sprintf(buf, "grep %s %s | awk -F':' '{print $1}' | awk -F',' '{print $2, $3}'", \
-		ip, g_sniffer_conf.status_file);
+    sprintf(buf, "grep %s %s | awk -F [:,] '{print $2, $3}' | awk 'END{print}'", ip, g_sniffer_conf.status_file);
     FILE *sp = popen(buf, "r");
-    if (sp == NULL)
+    if (sp == NULL) {
+		fprintf(g_error_file, "popen fail: %s.\n", ip);
         return -1;
+    }
     n = fread(p, 1, 128, sp);
 	pclose(sp);
+	if (n < 24) {
+		fprintf(g_error_file, "has no match info for: %s.\n", ip);
+		return -1;
+	}
     s = p;
     d = p + n;
 
@@ -719,7 +851,9 @@ int sniffer_get_real_ip(char *ip, char *p, char **q)
 }
 
 
-int sniffer_decode_data(request_info_t *info, int len, int mode)
+
+
+int sniffer_decode_data(request_info_t *info, int len)
 {
     struct iphdr *ip_h;
     struct tcphdr *tcp_h;
@@ -729,23 +863,24 @@ int sniffer_decode_data(request_info_t *info, int len, int mode)
     unsigned int tcp_h_len = 0;
     unsigned int ip_tot_len = 0;
 	char **p = NULL;
+	int  mode = undef_mode;
     time_t    t;
 
     info->cur = info->request_data + len;
     info->end = info->request_data + MAX_REQUEST_DATA_SIZE;
 
-    if (info->end - info->cur < 32 + 48 + 16 + 32) {
+    if (info->end - info->cur < 48 + 48 + 16 + 32) {
         info->cur = calloc(1, 2048);
         if (!info->cur) {
-            fprintf(stderr, "calloc fail.\n");
-            return -1;
+            fprintf(g_error_file, "calloc too large segment fail.\n");
+            return undef_mode;
         }
         info->extra = info->cur;
     }
     info->token = info->cur;
-    info->src_ip = NULL;
-    info->mid_ip = info->token + 64;
-    info->dst_ip = info->mid_ip + 16;
+    info->mid_ip = NULL;
+    info->src_ip = info->token + 64;
+    info->dst_ip = info->src_ip + 16;
     info->src_port = info->dst_ip + 16;
     info->dst_port = info->src_port + 8;
     info->time = info->dst_port + 8;
@@ -753,7 +888,7 @@ int sniffer_decode_data(request_info_t *info, int len, int mode)
 
     ip_h = (struct iphdr*)(info->request_data);
 	if (ip_h->protocol != 0x06) 
-		return -1;
+		return undef_mode;
 
     ip_h_len = ip_h->ihl << 2;
     ip_tot_len = ntohs(ip_h->tot_len);
@@ -764,47 +899,57 @@ int sniffer_decode_data(request_info_t *info, int len, int mode)
     info->req_app_len = ip_tot_len - ip_h_len - tcp_h_len;
     info->req_app_data = (char*)tcp_h + tcp_h_len;
 
-	if (!info->req_app_data) 
-		return -1;
+	if (info->req_app_len == 0) 
+		return undef_mode;
 
     t = time(NULL);
     ctime_r(&t, info->time);
     info->time[strlen(info->time) - 1] = '\0';
+	info->cur_time = t;
 
-	if (!mode) {
-		p = &g_request_method[0];
-		while (*p) {
-            if (memcmp(*p, info->req_app_data, strlen(*p)) == 0) 
-				break;
-			p ++;
-		}	
-		if (!(*p))
-			return -1;
-        strcpy(info->mid_ip, inet_ntoa(*((struct in_addr*)&ip_h->saddr)));
-        if (sniffer_get_real_ip(info->mid_ip, info->token, &info->src_ip))
-            return -1;
-        strcpy(info->dst_ip, inet_ntoa(*((struct in_addr*)&ip_h->daddr)));
-
-        snprintf(info->src_port, 8, "%d", ntohs(tcp_h->source));
-        snprintf(info->dst_port, 8, "%d", ntohs(tcp_h->dest));
-	} else {
+	p = &g_request_method[0];
+	while (*p) {
+        if (memcmp(*p, info->req_app_data, strlen(*p)) == 0) {
+		    mode = sniffer_request_mode;
+			break;
+        }
+		p ++;
+	}
+	if (mode == undef_mode) {
 	    p = &g_response_method[0];
-		while (*p) {
-            if (memcmp(*p, info->req_app_data, strlen(*p)) == 0) 
-				break;
-			p ++;
-		}	
-		if (!(*p))
-			return -1;
-        strcpy(info->mid_ip, inet_ntoa(*((struct in_addr*)&ip_h->daddr)));
-        if (sniffer_get_real_ip(info->mid_ip, info->token, &info->src_ip))
-            return -1;
-        strcpy(info->dst_ip, inet_ntoa(*((struct in_addr*)&ip_h->saddr)));
-        snprintf(info->src_port, 8, "%d", ntohs(tcp_h->dest));
-        snprintf(info->dst_port, 8, "%d", ntohs(tcp_h->source));
+	    while (*p) {
+            if (memcmp(*p, info->req_app_data, strlen(*p)) == 0) {
+			    mode = sniffer_response_mode;
+			    break;
+            }
+		    p ++;
+	    }	
+	}
+	if (mode == undef_mode) 
+		return mode;
+    strcpy(info->src_ip, inet_ntoa(*((struct in_addr*)&ip_h->saddr)));    
+	strcpy(info->dst_ip, inet_ntoa(*((struct in_addr*)&ip_h->daddr)));
+
+	if (mode == sniffer_request_mode) {
+        if (sniffer_get_real_ip(info->src_ip, info->token, &info->mid_ip)) {
+            fprintf(g_error_file, "get real ip from: %s fail.\n", info->src_ip);
+			return undef_mode;
+        }
+	} else {
+        if (sniffer_get_real_ip(info->dst_ip, info->token, &info->mid_ip)) {
+			fprintf(g_error_file, "get real ip from: %s fail.\n", info->dst_ip);
+            return undef_mode;
+        }
 	}
 
-    return 0;
+    snprintf(info->src_port, 8, "%d", ntohs(tcp_h->source));
+    snprintf(info->dst_port, 8, "%d", ntohs(tcp_h->dest));
+
+	info->packet_info.s_addr = ip_h->saddr;
+	info->packet_info.d_addr = ip_h->daddr;
+	info->packet_info.s_port = tcp_h->source;
+	info->packet_info.d_port = tcp_h->dest;
+    return mode;
 
 }
 int rawSocket(char *dev_name)
@@ -913,7 +1058,7 @@ int main(int argc, char **argv)
 	int mode = 0;
     char c = 0;
 
-    while ((c = getopt(argc, argv, "c:i:m:")) != -1) {
+    while ((c = getopt(argc, argv, "c:i:")) != -1) {
         switch(c) {
             case 'c':
                 conf_file = optarg;
@@ -921,9 +1066,6 @@ int main(int argc, char **argv)
             case 'i':
                 select_interface = optarg;
                 break;
-			case 'm':
-				mode = atoi(optarg);
-				break;
             default:
                 fprintf(stderr, "invalid arg.\n");
                 exit(-1);
@@ -959,9 +1101,17 @@ int main(int argc, char **argv)
         return -1;
     }
     */
-    len = sizeof(struct sockaddr);
+    
 
     init_g_free_buf();
+    pthread_t clean_p;
+
+    if((pthread_create(&clean_p, NULL, sniffer_hash_aging, NULL))==-1) {
+		fprintf(stderr, "create clean thread fail.\n");
+		return -1;
+	}
+	
+	len = sizeof(struct sockaddr);
     p = NULL;
 
     while ( 1 ) {
@@ -969,7 +1119,7 @@ int main(int argc, char **argv)
         if (!p) {
             p = calloc(1, sizeof(request_info_t));
             if (!p) {
-                fprintf(stderr, "get request_info_t fail.\n");
+                fprintf(g_error_file, "get extra request_info_t fail.\n");
                 sleep(1);
                 continue;
             }
@@ -978,8 +1128,8 @@ int main(int argc, char **argv)
         rval = recvfrom(sock, p->request_data, MAX_REQUEST_DATA_SIZE, \
                         0,(struct sockaddr*)&rcvaddr,&len);
         if(rval > 0) {
-            rval = sniffer_decode_data(p, rval, mode);
-            if (rval) {
+            mode = sniffer_decode_data(p, rval);
+            if (mode == undef_mode) {
                 release_request_info(p);
                 continue;
             }
@@ -988,9 +1138,16 @@ int main(int argc, char **argv)
                 release_request_info(p);
                 continue;
             }
-            sniffer_log_request(p);
+			if (mode == sniffer_request_mode) {
+				sniffer_hash_add(p);
+			} else {
+			    sniffer_hash_mergh(p);
+				if (p->partern)
+                    sniffer_log_request(p);
+				release_request_info(p);
+			}
+            
         }
-        release_request_info(p);
     }
     fclose(g_access_file);
     fclose(g_error_file);
