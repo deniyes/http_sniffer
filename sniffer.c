@@ -44,17 +44,17 @@ struct log_output_s {
 
 
 typedef struct {
-    int thread_num;
-    int max_thread_num;
-    int daemon;
-    char access_log[128];
-    char error_log[128];
-    char status_file[128];
-    log_output_t *log_handlers[128];
+    int thread_num;                   /*线程数*/
+    int max_thread_num;               /*最大线程数*/
+    int daemon;                       /*是否后台执行*/
+    char access_log[128];             /*access日志*/
+    char error_log[128];              /*error日志*/
+    char status_file[128];            /*openvpn状态文件*/
+    log_output_t *log_handlers[128];  /*日志handler*/
 
 } sniffer_conf_t;
 
-
+/*默认配置信息*/
 sniffer_conf_t  g_sniffer_conf = {
     .thread_num = 1,
     .max_thread_num = 1,
@@ -264,13 +264,18 @@ free_buf_t g_free_buf;
 FILE *g_access_file = NULL;
 FILE *g_error_file = NULL;
 
-
+/*
+ 计算hash值
+ */
 unsigned int 
 sniffer_hash_function(packet_info_t *info)
 {
     return (info->s_addr + info->d_addr + info->s_port + info->d_port) ;
 }
 
+/*
+ hash value一致后，对比节点信息
+ */
 int sniffer_compare_function (packet_info_t *src, packet_info_t *dst)
 {
     return (src->s_addr == dst->s_addr \
@@ -288,14 +293,18 @@ int sniffer_compare_function_r (packet_info_t *src, packet_info_t *dst)
 }
 
 
-
+/*
+ 本handler会根据offset，返回对应字段信息
+ */
 char* sniffer_log_get_header(int offset, char *conf)
 {
     char **p = (char**)(conf + offset);
     return (*p);
 }
 
-
+/*
+ 初始化内存池
+ */
 void init_g_free_buf()
 {
     int i = 0;
@@ -329,6 +338,9 @@ request_info_t *get_free_request()
 
 void sniffer_hash_del(request_info_t *item);
 
+/*
+ 删除指定节点的资源，并把资源释放回内存池
+ */
 void release_request_info(request_info_t *r)
 {
     if (r->extra) {
@@ -347,6 +359,9 @@ void release_request_info(request_info_t *r)
     pthread_mutex_unlock(&g_free_buf.lock);
 }
 
+/*
+ 增加hash节点
+ */
 
 void sniffer_hash_add(request_info_t *item)
 {
@@ -369,6 +384,9 @@ void sniffer_hash_add(request_info_t *item)
     pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
 }
 
+/*
+  请求首部和响应首部信息合并
+ */
 void sniffer_hash_mergh(request_info_t *item)
 {
     unsigned int hash_value = sniffer_hash_function(&item->packet_info);
@@ -400,7 +418,9 @@ void sniffer_hash_mergh(request_info_t *item)
         item->dst_ip, item->src_ip, item->dst_port, item->src_port);
 }
 
-
+/*
+  删除一个hash节点
+ */
 void sniffer_hash_del(request_info_t *item)
 {
     unsigned int hash_value = sniffer_hash_function(&item->packet_info);
@@ -433,7 +453,9 @@ void sniffer_hash_del(request_info_t *item)
         item->src_ip, item->dst_ip, item->src_port, item->dst_port);
 }
 
-
+/*
+ 单独线程，定时清理超时的节点
+ */
 void *sniffer_hash_aging(void *unused) 
 {
     int index = 0;
@@ -466,7 +488,9 @@ void *sniffer_hash_aging(void *unused)
     }
 }
 
-
+/*
+ 配置文件的通用handler，处理value是整数的
+ */
 int sniffer_set_num(char *value, int offset, char *conf)
 {
     int *t = (int*)((char*)conf + offset);
@@ -485,6 +509,9 @@ int sniffer_set_num(char *value, int offset, char *conf)
     return 0;
  }
 
+/*
+ 配置文件的通用handler，处理value是开关形式的，比如on, off
+ */
 
 int sniffer_set_flg(char *value, int offset, char *conf)
 {
@@ -501,6 +528,9 @@ int sniffer_set_flg(char *value, int offset, char *conf)
     return 0;
 }
 
+/*
+ 配置文件的通用handler，处理字符串形式
+ */
 int sniffer_set_path(char *value, int offset, char *conf)
 {
     char *p = conf + offset;
@@ -517,6 +547,10 @@ enum decode_log_status {
     item_stop,
     format_stop
 };
+
+/*
+ 配置文件的通用handler，处理可配置日志方式
+ */
 
 void sniffer_push_hander(sniffer_conf_t *sniffer_conf, char *name, int name_len)
 {
@@ -604,7 +638,9 @@ ERROR:
     return -1;
 }
 
-
+/*
+ 根据name字段，调用对应handler，处理配置文件
+ */
 int parse_info(char *name, char *value)
 {
     conf_name_mapping_t *p = &name_mapping[0];
@@ -627,7 +663,9 @@ int parse_info(char *name, char *value)
 
     return 0;
 }
-
+/*
+ 解析每个首部行
+ */
 int parse_line(char *start, char *end)
 {
     char *name = start;
@@ -656,7 +694,9 @@ ERROR:
     return -1;
 }
 
-
+/*
+ 解析配置文件
+ */
 int parse_conf(char *path)
 {
     FILE *fp = fopen(path, "r");
@@ -708,7 +748,9 @@ ERROR:
 }
 
 
-
+/*
+ 对每个log配置项，输出信息到日志文件
+ */
 void sniffer_log_request(request_info_t *info)
 {
     char *p = NULL;
@@ -728,11 +770,15 @@ void sniffer_log_request(request_info_t *info)
 
 }
 
+/* 
+  保存log中指定的首部字段信息  
+ */
 void arrange_item(request_info_t *info, char *name, char *value, int name_len)
 {
     char **s = NULL;
     log_output_t *tmp = &log_format[0];
     while (tmp->name_len) {
+		/*假如首部名称长度一致且名称一致，保存到对应位置上*/
         if (tmp->name_len == name_len) 
             if (strncmp(name, tmp->name, name_len) == 0) {
                 s = (char**)((char*)info + tmp->offset);
@@ -748,7 +794,10 @@ void arrange_item(request_info_t *info, char *name, char *value, int name_len)
 #define sniffer_request_mode  (0x11)
 #define sniffer_response_mode (0x22)
 
-
+/*
+  假如是请求头部，分析得到请求URI, 以及首部字段信息；
+  假如是响应头部，分析得到响应状态码等，以及每个首部信息；
+ */
 int sniffer_analy_data(request_info_t *info, int mode)
 {
     char *p = info->req_app_data;
@@ -827,6 +876,9 @@ int sniffer_analy_data(request_info_t *info, int mode)
     return 0;
 }
 
+/*
+ 根据openvpn的status文件，由inner ip获取real ip
+ */
 int sniffer_get_real_ip(char *ip, char *p, char **q)
 {
     char buf[128] = {0};
@@ -863,8 +915,9 @@ int sniffer_get_real_ip(char *ip, char *p, char **q)
 }
 
 
-
-
+/*
+ 对原始套接字抓取到的数据，解析IP->TCP层，获取ip，port等信息，并确定是请求报文还是响应报文
+ */
 int sniffer_decode_data(request_info_t *info, int len)
 {
     struct iphdr *ip_h;
@@ -964,6 +1017,10 @@ int sniffer_decode_data(request_info_t *info, int len)
     return mode;
 
 }
+
+/*
+ 创建原始套接字
+ */
 int rawSocket(char *dev_name)
 {
     int raw_sock_fd;
@@ -1023,6 +1080,10 @@ int rawSocket(char *dev_name)
     return raw_sock_fd;
 }
 
+
+/* 
+ 网卡流量过滤, 根据BPF伪代码，只抓取以GET 开头的TCP数据
+ */
 int set_filter(int *sock)
 {
     struct sock_filter code[] = {
@@ -1101,23 +1162,26 @@ int main(int argc, char **argv)
         fprintf(stderr, "open error file fail.\n");
         return -1;
     }
-
+	
+    /*创建原始套接字*/
     sock = rawSocket(select_interface);
     if (sock == -1) {
          fprintf(stderr, "set promisc fail.\n");
          return -1;
     }
     /*
+	//BPF伪代码过滤网卡流量
     if (set_filter(&sock) == -1) {
          fprintf(stderr, "set filter fail.\n");
         return -1;
     }
     */
     
-
+    /*初始化简单的内存池*/
     init_g_free_buf();
     pthread_t clean_p;
 
+    /*内存池老化线程*/
     if((pthread_create(&clean_p, NULL, sniffer_hash_aging, NULL))==-1) {
         fprintf(stderr, "create clean thread fail.\n");
         return -1;
@@ -1127,7 +1191,7 @@ int main(int argc, char **argv)
     p = NULL;
 
     while ( 1 ) {
-        p = get_free_request();
+        p = get_free_request();  /*获取一个empty的请求结构*/
         if (!p) {
             p = calloc(1, sizeof(request_info_t));
             if (!p) {
@@ -1140,7 +1204,8 @@ int main(int argc, char **argv)
         rval = recvfrom(sock, p->request_data, MAX_REQUEST_DATA_SIZE, \
                         0,(struct sockaddr*)&rcvaddr,&len);
         if(rval > 0) {
-            mode = sniffer_decode_data(p, rval);
+			/*解析原始套接字抓取的数据包，得到ip,port等信息，并感知是request还是response*/
+            mode = sniffer_decode_data(p, rval);  
             if (mode == undef_mode) {
                 release_request_info(p);
                 continue;
@@ -1150,9 +1215,12 @@ int main(int argc, char **argv)
                 release_request_info(p);
                 continue;
             }
+			
             if (mode == sniffer_request_mode) {
+				/*假如是HTTP请求, 创建一个请求节点，加入到hash表中*/
                 sniffer_hash_add(p);
             } else {
+                /*假如是HTTP响应, 创建一个节点，合并到hash表对应的请求节点中*/
                 sniffer_hash_mergh(p);
                 if (p->partern)
                     sniffer_log_request(p);
