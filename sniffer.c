@@ -265,7 +265,7 @@ FILE *g_access_file = NULL;
 FILE *g_error_file = NULL;
 
 /*
- 计算hash值
+ *计算hash值
  */
 unsigned int 
 sniffer_hash_function(packet_info_t *info)
@@ -274,7 +274,7 @@ sniffer_hash_function(packet_info_t *info)
 }
 
 /*
- hash value一致后，对比节点信息
+ *hash value一致后，对比节点信息
  */
 int sniffer_compare_function (packet_info_t *src, packet_info_t *dst)
 {
@@ -294,7 +294,7 @@ int sniffer_compare_function_r (packet_info_t *src, packet_info_t *dst)
 
 
 /*
- 本handler会根据offset，返回对应字段信息
+ *本handler会根据offset，返回对应字段信息
  */
 char* sniffer_log_get_header(int offset, char *conf)
 {
@@ -303,7 +303,7 @@ char* sniffer_log_get_header(int offset, char *conf)
 }
 
 /*
- 初始化内存池
+ *初始化内存池
  */
 void init_g_free_buf()
 {
@@ -339,7 +339,7 @@ request_info_t *get_free_request()
 void sniffer_hash_del(request_info_t *item);
 
 /*
- 删除指定节点的资源，并把资源释放回内存池
+ *删除指定节点的资源，并把资源释放回内存池
  */
 void release_request_info(request_info_t *r)
 {
@@ -360,7 +360,7 @@ void release_request_info(request_info_t *r)
 }
 
 /*
- 增加hash节点
+ *增加hash节点
  */
 
 void sniffer_hash_add(request_info_t *item)
@@ -385,7 +385,7 @@ void sniffer_hash_add(request_info_t *item)
 }
 
 /*
-  请求首部和响应首部信息合并
+ *请求首部和响应首部信息合并
  */
 void sniffer_hash_mergh(request_info_t *item)
 {
@@ -419,7 +419,7 @@ void sniffer_hash_mergh(request_info_t *item)
 }
 
 /*
-  删除一个hash节点
+ *删除一个hash节点
  */
 void sniffer_hash_del(request_info_t *item)
 {
@@ -454,7 +454,7 @@ void sniffer_hash_del(request_info_t *item)
 }
 
 /*
- 单独线程，定时清理超时的节点
+ *单独线程，定时清理超时的节点
  */
 void *sniffer_hash_aging(void *unused) 
 {
@@ -489,7 +489,7 @@ void *sniffer_hash_aging(void *unused)
 }
 
 /*
- 配置文件的通用handler，处理value是整数的
+ *配置文件的通用handler，处理value是整数的
  */
 int sniffer_set_num(char *value, int offset, char *conf)
 {
@@ -510,7 +510,7 @@ int sniffer_set_num(char *value, int offset, char *conf)
  }
 
 /*
- 配置文件的通用handler，处理value是开关形式的，比如on, off
+ *配置文件的通用handler，处理value是开关形式的，比如on, off
  */
 
 int sniffer_set_flg(char *value, int offset, char *conf)
@@ -529,7 +529,7 @@ int sniffer_set_flg(char *value, int offset, char *conf)
 }
 
 /*
- 配置文件的通用handler，处理字符串形式
+ *配置文件的通用handler，处理字符串形式
  */
 int sniffer_set_path(char *value, int offset, char *conf)
 {
@@ -549,7 +549,7 @@ enum decode_log_status {
 };
 
 /*
- 配置文件的通用handler，处理可配置日志方式
+ *配置文件的通用handler，处理可配置日志方式
  */
 
 void sniffer_push_hander(sniffer_conf_t *sniffer_conf, char *name, int name_len)
@@ -639,7 +639,7 @@ ERROR:
 }
 
 /*
- 根据name字段，调用对应handler，处理配置文件
+ *根据name字段，调用对应handler，处理配置文件
  */
 int parse_info(char *name, char *value)
 {
@@ -664,7 +664,7 @@ int parse_info(char *name, char *value)
     return 0;
 }
 /*
- 解析每个首部行
+ *解析每个首部行
  */
 int parse_line(char *start, char *end)
 {
@@ -695,7 +695,7 @@ ERROR:
 }
 
 /*
- 解析配置文件
+ *解析配置文件
  */
 int parse_conf(char *path)
 {
@@ -749,7 +749,7 @@ ERROR:
 
 
 /*
- 对每个log配置项，输出信息到日志文件
+ *对每个log配置项，输出信息到日志文件
  */
 void sniffer_log_request(request_info_t *info)
 {
@@ -771,7 +771,7 @@ void sniffer_log_request(request_info_t *info)
 }
 
 /* 
-  保存log中指定的首部字段信息  
+ *保存log中指定的首部字段信息  
  */
 void arrange_item(request_info_t *info, char *name, char *value, int name_len)
 {
@@ -795,8 +795,8 @@ void arrange_item(request_info_t *info, char *name, char *value, int name_len)
 #define sniffer_response_mode (0x22)
 
 /*
-  假如是请求头部，分析得到请求URI, 以及首部字段信息；
-  假如是响应头部，分析得到响应状态码等，以及每个首部信息；
+ *假如是请求头部，分析得到请求URI, 以及首部字段信息；
+ *假如是响应头部，分析得到响应状态码等，以及每个首部信息；
  */
 int sniffer_analy_data(request_info_t *info, int mode)
 {
@@ -877,7 +877,7 @@ int sniffer_analy_data(request_info_t *info, int mode)
 }
 
 /*
- 根据openvpn的status文件，由inner ip获取real ip
+ *根据openvpn的status文件，由inner ip获取real ip
  */
 int sniffer_get_real_ip(char *ip, char *p, char **q)
 {
@@ -916,7 +916,7 @@ int sniffer_get_real_ip(char *ip, char *p, char **q)
 
 
 /*
- 对原始套接字抓取到的数据，解析IP->TCP层，获取ip，port等信息，并确定是请求报文还是响应报文
+ *对原始套接字抓取到的数据，解析IP->TCP层，获取ip，port等信息，并确定是请求报文还是响应报文
  */
 int sniffer_decode_data(request_info_t *info, int len)
 {
@@ -1019,7 +1019,7 @@ int sniffer_decode_data(request_info_t *info, int len)
 }
 
 /*
- 创建原始套接字
+ *创建原始套接字
  */
 int rawSocket(char *dev_name)
 {
@@ -1082,7 +1082,7 @@ int rawSocket(char *dev_name)
 
 
 /* 
- 网卡流量过滤, 根据BPF伪代码，只抓取以GET 开头的TCP数据
+ *网卡流量过滤, 根据BPF伪代码，只抓取以GET 开头的TCP数据
  */
 int set_filter(int *sock)
 {
