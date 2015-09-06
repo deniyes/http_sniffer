@@ -403,10 +403,10 @@ void sniffer_hash_mergh(request_info_t *item)
             fprintf(g_error_file, "src_ip:%s dst_ip:%s  src_port: %s dst_port:%s is merghing.\n", \
                 item->dst_ip, item->src_ip, item->dst_port, item->src_port);
             for(pos = (char**)((char*)p + start_offset), dst = (char**)((char*)item + start_offset); 
-                pos <= (char**)((char*)p + end_offset), dst <= (char**)((char*)item + end_offset); pos ++)
+                pos <= (char**)((char*)p + end_offset), dst <= (char**)((char*)item + end_offset); pos ++, dst ++)
                 if (*pos != NULL && *dst == NULL)
                     *dst = *pos;
-            
+            item->partern = p;
             pthread_mutex_unlock(&g_free_buf.lock_hash[hash_value % max_request_hash]);
             return;
         }
@@ -828,12 +828,7 @@ int sniffer_analy_data(request_info_t *info, int mode)
             p ++;
         if (p == end) return -1;
         p += 1;
-
-        if (strncmp(p, "/abc/", 5) == 0 \
-            || strncmp(p, "/vpn/", 5) == 0 \
-            || strncmp(p, "/gate/", 6) == 0) {
-            return -1;
-        }
+		
         while (p < end && *p != ' ')
              p ++;
         if (p == end) return -1;
@@ -877,53 +872,12 @@ int sniffer_analy_data(request_info_t *info, int mode)
 }
 
 /*
- *根据openvpn的status文件，由inner ip获取real ip
- */
-int sniffer_get_real_ip(char *ip, char *p, char **q)
-{
-    char buf[128] = {0};
-    char *s = NULL;
-    char *d = NULL;
-    int n = 0;
-    sprintf(buf, "grep %s %s | awk -F [:,] '{print $2, $3}' | awk 'END{print}'", ip, g_sniffer_conf.status_file);
-    FILE *sp = popen(buf, "r");
-    if (sp == NULL) {
-        fprintf(g_error_file, "popen fail: %s.\n", ip);
-        return -1;
-    }
-    n = fread(p, 1, 128, sp);
-    pclose(sp);
-    if (n < 24) {
-        fprintf(g_error_file, "has no match info for: %s.\n", ip);
-        return -1;
-    }
-    s = p;
-    d = p + n;
-
-    while(s < d) {
-        if (*s == ' ')
-            break;
-        s ++;
-    }
-    if (s == d) {
-        return -1;
-    }
-    *(s ++) = '\0';
-    *q = s;
-    p[n - 1]='\0';
-    return 0;
-}
-
-
-/*
  *对原始套接字抓取到的数据，解析IP->TCP层，获取ip，port等信息，并确定是请求报文还是响应报文
  */
 int sniffer_decode_data(request_info_t *info, int len)
 {
     struct iphdr *ip_h;
     struct tcphdr *tcp_h;
-    struct udphdr *udp_h;
-    struct ether_header *ether_h;
     unsigned int ip_h_len = 0;
     unsigned int tcp_h_len = 0;
     unsigned int ip_tot_len = 0;
@@ -951,7 +905,7 @@ int sniffer_decode_data(request_info_t *info, int len)
     info->time = info->dst_port + 8;
     info->cur = info->time + 32;
 
-    ip_h = (struct iphdr*)(info->request_data);
+    ip_h = (struct iphdr*)(info->request_data + sizeof(struct ether_header));
     if (ip_h->protocol != 0x06) 
         return undef_mode;
 
@@ -994,18 +948,6 @@ int sniffer_decode_data(request_info_t *info, int len)
         return mode;
     strcpy(info->src_ip, inet_ntoa(*((struct in_addr*)&ip_h->saddr)));    
     strcpy(info->dst_ip, inet_ntoa(*((struct in_addr*)&ip_h->daddr)));
-
-    if (mode == sniffer_request_mode) {
-        if (sniffer_get_real_ip(info->src_ip, info->token, &info->mid_ip)) {
-            fprintf(g_error_file, "get real ip from: %s fail.\n", info->src_ip);
-            return undef_mode;
-        }
-    } else {
-        if (sniffer_get_real_ip(info->dst_ip, info->token, &info->mid_ip)) {
-            fprintf(g_error_file, "get real ip from: %s fail.\n", info->dst_ip);
-            return undef_mode;
-        }
-    }
 
     snprintf(info->src_port, 8, "%d", ntohs(tcp_h->source));
     snprintf(info->dst_port, 8, "%d", ntohs(tcp_h->dest));
@@ -1082,31 +1024,27 @@ int rawSocket(char *dev_name)
 
 
 /* 
- *网卡流量过滤, 根据BPF伪代码，只抓取以GET 开头的TCP数据
+ *网卡流量过滤, 根据BPF伪代码，只抓取以GET, POST, HTTP 开头的TCP数据
  */
 int set_filter(int *sock)
 {
     struct sock_filter code[] = {
                { 0x28, 0, 0, 0x0000000c },
-               { 0x15, 0, 14, 0x00000800 },
+               { 0x15, 0, 10, 0x00000800 },
                { 0x30, 0, 0, 0x00000017 },
-               { 0x15, 0, 12, 0x00000006 },
+               { 0x15, 0, 8, 0x00000006 },
                { 0x28, 0, 0, 0x00000014 },
-               { 0x45, 10, 0, 0x00001fff },
+               { 0x45, 6, 0, 0x00001fff },
                { 0xb1, 0, 0, 0x0000000e },
-               { 0x50, 0, 0, 0x0000001a },
-               { 0x54, 0, 0, 0x000000f0 },
-               { 0x74, 0, 0, 0x00000002 },
-               { 0xc, 0, 0, 0x00000000 },
-               { 0x7, 0, 0, 0x00000000 },
-               { 0x40, 0, 0, 0x0000000e },
-               { 0x15, 1, 0, 0x47455420 },
-               { 0x15, 0, 1, 0x504f5354 },
+               { 0x40, 0, 0, 0x00000022 },
+               { 0x15, 2, 0, 0x47455420 },
+               { 0x15, 1, 0, 0x504f5354 },
+               { 0x15, 0, 1, 0x48545450 },
                { 0x6, 0, 0, 0x0000ffff },
                { 0x6, 0, 0, 0x00000000 }
     };
     struct sock_fprog filter;
-    filter.len = 17;
+    filter.len = 13;
     filter.filter = code;
 
     int ret = setsockopt(*sock, SOL_SOCKET, SO_ATTACH_FILTER, &filter, sizeof(filter));
@@ -1169,13 +1107,12 @@ int main(int argc, char **argv)
          fprintf(stderr, "set promisc fail.\n");
          return -1;
     }
-    /*
+    
 	//BPF伪代码过滤网卡流量
     if (set_filter(&sock) == -1) {
          fprintf(stderr, "set filter fail.\n");
         return -1;
     }
-    */
     
     /*初始化简单的内存池*/
     init_g_free_buf();
